@@ -4928,9 +4928,10 @@ class MDF:
                                         common_timebase=True,
                                     )
 
-                                    out.groups[
-                                        cg_nr
-                                    ].channel_group.flags = v4c.FLAG_CG_BUS_EVENT
+                                    if self.version != "3.0":
+                                        out.groups[
+                                            cg_nr
+                                        ].channel_group.flags = v4c.FLAG_CG_BUS_EVENT
 
                                     if is_j1939:
                                         max_flags.append([False])
