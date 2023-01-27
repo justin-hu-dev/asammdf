@@ -337,6 +337,7 @@ class MDF:
 
             if version in MDF3_VERSIONS:
                 self._mdf = MDF3(name, channels=channels, **kwargs)
+                self.version = version
             elif version in MDF4_VERSIONS:
                 self._mdf = MDF4(name, channels=channels, **kwargs)
             elif version in MDF2_VERSIONS:
@@ -4584,12 +4585,20 @@ class MDF:
         else:
             version = validate_version_argument(version)
 
-        out = MDF(
-            version=version,
-            password=self._password,
-            callback=self._callback,
-            use_display_names=True,
-        )
+        if self.version != "3.0":
+            out = MDF(
+                version=version,
+                password=self._password,
+                callback=self._callback,
+                use_display_names=True,
+            )
+        else:
+            out = MDF(
+                version=version,
+                callback=self._callback,
+                use_display_names=True,
+            )
+
         out.header.start_time = self.header.start_time
 
         if self._callback:
@@ -4648,8 +4657,9 @@ class MDF:
         count = sum(
             1
             for group in self.groups
-            if group.channel_group.flags & v4c.FLAG_CG_BUS_EVENT
-            and group.channel_group.acq_source.bus_type == v4c.BUS_TYPE_CAN
+            if self.version == "3.0" or (
+            group.channel_group.flags & v4c.FLAG_CG_BUS_EVENT
+            and group.channel_group.acq_source.bus_type == v4c.BUS_TYPE_CAN)
         )
         count *= len(valid_dbc_files)
 
@@ -4681,9 +4691,12 @@ class MDF:
 
             for i, group in enumerate(self.groups):
                 if (
-                    not group.channel_group.flags & v4c.FLAG_CG_BUS_EVENT
-                    or not group.channel_group.acq_source.bus_type == v4c.BUS_TYPE_CAN
-                    or not "CAN_DataFrame" in [ch.name for ch in group.channels]
+                    self.version != "3.0" and
+                    (
+                        not group.channel_group.flags & v4c.FLAG_CG_BUS_EVENT
+                        or not group.channel_group.acq_source.bus_type == v4c.BUS_TYPE_CAN
+                        or not "CAN_DataFrame" in [ch.name for ch in group.channels]
+                    )
                 ):
                     continue
 
@@ -4695,19 +4708,35 @@ class MDF:
                     self._set_temporary_master(None)
                     self._set_temporary_master(self.get_master(i, data=fragment))
 
-                    bus_ids = self.get(
-                        "CAN_DataFrame.BusChannel",
-                        group=i,
-                        data=fragment,
-                        samples_only=True,
-                    )[0].astype("<u1")
+                    if self.version != "3.0":
+                        bus_ids = self.get(
+                            "CAN_DataFrame.BusChannel",
+                            group=i,
+                            data=fragment,
+                            samples_only=True,
+                        )[0].astype("<u1")
+                    else:
+                        bus_ids = self.get(
+                            "can",
+                            group=i,
+                            data=fragment,
+                            samples_only=True,
+                        )[0].astype("<u1")
 
-                    msg_ids = (
-                        self.get("CAN_DataFrame.ID", group=i, data=fragment).astype(
-                            "<u4"
+                    if self.version != "3.0":
+                        msg_ids = (
+                            self.get("CAN_DataFrame.ID", group=i, data=fragment).astype(
+                                "<u4"
+                            )
+                            & 0x1FFFFFFF
                         )
-                        & 0x1FFFFFFF
-                    )
+                    else:
+                        msg_ids = (
+                            self.get("id", group=i, data=fragment).astype(
+                                "<u4"
+                            )
+                            & 0x1FFFFFFF
+                        )
 
                     original_ids = msg_ids.samples & 0xFF
 
@@ -4718,12 +4747,23 @@ class MDF:
                         _pgn = tmp_pgn & 0x3FF00
                         msg_ids.samples = np.where(pf >= 240, _pgn + ps, _pgn)
 
-                    data_bytes = self.get(
-                        "CAN_DataFrame.DataBytes",
-                        group=i,
-                        data=fragment,
-                        samples_only=True,
-                    )[0]
+                    if self.version != "3.0":
+                        data_bytes = self.get(
+                            "CAN_DataFrame.DataBytes",
+                            group=i,
+                            data=fragment,
+                            samples_only=True,
+                        )[0]
+                    else:
+                        dbs = []
+                        for n in range(8):
+                            dbs.append(self.get(
+                                f"msg[{n}]",
+                                group=i,
+                                data=fragment,
+                                samples_only=True,
+                            )[0])
+                        data_bytes = np.stack([db for db in dbs]).T
 
                     buses = np.unique(bus_ids)
 
